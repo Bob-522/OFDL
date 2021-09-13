@@ -105,7 +105,6 @@ class MainWindow:
         self.master = master
         self.master.title("OF Downloader")
         self.master.geometry("680x530")
-        self.sort = False
 
         self.TreeView = CheckboxTreeview(master, show="tree")
         self.TreeView.place(x = 20, y = 40, height = 300)
@@ -117,14 +116,15 @@ class MainWindow:
         self.Status.place(x = 20, y = 440)
 
         vsb = Scrollbar(master, orient="vertical", command=self.TreeView.yview)
-        vsb.place(x=220, y=40, height=300) #height=200+20
+        vsb.place(x=220, y=40, height=300)
 
         self.TreeView.configure(yscrollcommand=vsb.set)
 
         self.ComboBox = Combobox(master, state= "readonly",
                                  values = ["Active Subscriptions",
                                             "Expired Subscriptions",
-                                            "All Subscriptions"])
+                                            "All Subscriptions"],
+                                width=29)
 
         self.ComboBox.bind("<<ComboboxSelected>>", self.refresh)
         self.ComboBox.current(0)
@@ -134,22 +134,28 @@ class MainWindow:
         self.GetLinks.place(x = 20, y = 400)
 
         self.Download = Button(master, text="Download Files", command=self.Download_Files_T)
-        self.Download.place(x = 140, y = 400)
+        self.Download.place(x = 130, y = 400)
         self.Download.configure(state='disabled')
 
-        self.LogText = tk.Text(master, height = 18, width = 48)
+        self.LogText = tk.Text(master, height = 18, width = 49)
         self.LogText.place(x = 240, y = 40)
 
-        self.ProgressBar = Progressbar(master, orient="horizontal", length=350, mode="determinate")
-        self.ProgressBar.place(x = 250, y = 350)
+        self.ProgressBar = Progressbar(master, orient="horizontal", length=400, mode="determinate")
+        self.ProgressBar.place(x = 240, y = 350)
         self.ProgressBar["maximum"] = 100
 
-        self.FilesLeft = Label(master, text = "Files download: 0 / 0")
-        self.FilesLeft.place(x = 250, y = 380)
+        self.FilesLeft = Label(master, text = "Files download: 0 / 0", width=32)
+        self.FilesLeft.place(x = 240, y = 380)
 
-        self.ProgressBarItem = Progressbar(master, orient="horizontal", length=350, mode="determinate")
-        self.ProgressBarItem.place(x = 250, y = 410)
+        self.TotalSizeLeft = Label(master, text = "0.00 B / 0.00 B", width=32, anchor="e")
+        self.TotalSizeLeft.place(x = 440, y = 380)
+
+        self.ProgressBarItem = Progressbar(master, orient="horizontal", length=400, mode="determinate")
+        self.ProgressBarItem.place(x = 240, y = 410)
         self.ProgressBarItem["maximum"] = 100
+
+        self.FileSizeLeft = Label(master, text = "0.00 B / 0.00 B", width=32, anchor="e")
+        self.FileSizeLeft.place(x = 440, y = 440)
 
         self.onlyfans = Onlyfans()
         self.onlyfans.load_config()
@@ -209,6 +215,11 @@ class MainWindow:
         self.onlyfans.reset_download_size()
         self.onlyfans.clear_links()
         self.onlyfans.clear_array()
+        self.ProgressBar['value'] =  0
+        self.FilesLeft.configure(text = "Files download: 0 / 0")
+        self.TotalSizeLeft.configure(text = "0.00 B / 0.00 B")
+        self.ProgressBarItem['value'] =  0
+        self.FileSizeLeft.configure(text = "0.00 B / 0.00 B")
 
         self.Download.configure(state='disabled')
         self.GetLinks.configure(state='disabled')
@@ -240,59 +251,61 @@ class MainWindow:
                 users.append(tmp)
                 
         self.LogText.delete(1.0, tk.END)
+        total_size = 0
+        file_count = 0
+        image_count = 0
         for u in users:
             for key, value in u.items():
+                self.Status.configure(text = "Status: Collecting Links (" + key + ") ...")
                 dict_return = self.onlyfans.get_user_info(key)
                 if dict_return is None:
                     continue
-                self.onlyfans.get_links(dict_return, value, index)
-                self.display_info(self.onlyfans.return_links(), False)
+                links_user = self.onlyfans.get_links(dict_return, value, index)
+                self.display_info_user(links_user)
+                file_count += links_user["file_count"]
+                self.FilesLeft.configure(text = "Files download: 0 / " + str(file_count))
+                total_size += links_user["user_file_size"]
+                image_count += len(links_user["images"])
+                self.TotalSizeLeft.configure(text = "0.00 B / " + self.onlyfans.File_Size_Str(total_size))
                 index += 1
-                
-        links = self.onlyfans.return_links()
-        if len(links) == 0:
-            self.GetLinks.configure(state='normal')
-            self.Status.configure(text = "Status: Done ...")
-            return
 
-        self.display_info(links, True)
+        self.display_info_end(file_count, total_size, image_count)
 
-    def display_info(self, links, is_completed):
-        total_size = 0
-        file_count = 0
-        types_file = ["messages", "stories", "images", "videos", "audio", "archived"]
-        
-        self.LogText.delete(1.0, tk.END)
-        for user in links:
-            user_file_size = 0
-            user_name = self.onlyfans.subscript_array(user["index"]) + ": \n"
-            self.LogText.insert(tk.END, user_name)
-            for type_file in types_file:
-                user_links = user[type_file]
-                user_file_size = user["user_file_size"]
-                self.LogText.insert(tk.END, "   " + type_file + ": " + str(len(user_links)) + "\n")
+    def display_info_user(self, links):
+        self.LogText.insert(tk.END, self.onlyfans.subscript_array(links["index"]) + ": \n")
+        for type_file in module.OF.TYPE_FILE:
+            nb_links = len(links[type_file])
+            if nb_links > 0:
+                self.LogText.insert(tk.END, "   " + type_file + ' ' * (9 - len(type_file)) + ": " + str(nb_links))
+                if type_file == "videos":
+                    self.LogText.insert(tk.END, " (" + self.onlyfans.File_Size_Str(links["user_file_size"]) + ")\n")
+                elif type_file == "images":
+                    self.LogText.insert(tk.END, " (~" + self.onlyfans.File_Size_Str(nb_links * 725_000) + ")\n")
+                else:
+                    self.LogText.insert(tk.END, "\n")
 
-            self.LogText.insert(tk.END, "   Total: " + str(user["file_count"]) + "\n")
-            self.LogText.insert(tk.END, "   Total size: " + self.onlyfans.File_Size_Str(user_file_size) + "\n")
-            file_count += user["file_count"]
-            total_size += user_file_size
-               
-        if is_completed:
-            self.LogText.insert(tk.END, "\n\n")
-            self.LogText.insert(tk.END, "Files to be downloaded: " + str(file_count) + "\n")
-            self.LogText.insert(tk.END, "Download Size (videos): " + self.onlyfans.File_Size_Str(total_size) + "\n")
-            print("============================================================")
-            print("Getting links ... Completed")
-            print("     Files to be downloaded: " + str(file_count))
-            print("     Download Size (videos): " + self.onlyfans.File_Size_Str(total_size))
-            print("============================================================")
+        if links["file_count"] > 0:
+            self.LogText.insert(tk.END, "             ------\n")
+        self.LogText.insert(tk.END, "   Total    : " + str(links["file_count"]) + "\n")
+        self.LogText.see(tk.END)
 
-            self.GetLinks.configure(state='normal')
-            if file_count > 0:
-                self.Download.configure(state='normal')
-            else:
-                self.Download.configure(state='disabled')
-            self.Status.configure(text = "Status: Done ...")
+    def display_info_end(self, file_count, total_size, image_count):
+        self.LogText.insert(tk.END, "\n\n")
+        self.LogText.insert(tk.END, "Files to be downloaded: " + str(file_count) + "\n")
+        self.LogText.insert(tk.END, "Download Size : " + self.onlyfans.File_Size_Str(total_size) + " (+ ~" + self.onlyfans.File_Size_Str(image_count * 725_000) + ")\n")
+        print("============================================================")
+        print("Getting links ... Completed")
+        print("     Files to be downloaded: " + str(file_count))
+        print("     Download Size (videos): " + self.onlyfans.File_Size_Str(total_size))
+        print("============================================================")
+
+        self.GetLinks.configure(state='normal')
+        if file_count > 0:
+            self.Download.configure(state='normal')
+        else:
+            self.Download.configure(state='disabled')
+        self.Status.configure(text = "Status: Done ...")
+        self.LogText.see(tk.END)
     
     def Download_Files(self):
         files = self.onlyfans.return_links()
@@ -304,7 +317,6 @@ class MainWindow:
         self.ProgressBar['value'] = 0
         self.ProgressBarItem['value'] = 0
         file_downloaded = 0
-        types_file = ["messages", "stories", "images", "videos", "audio", "archived"]
 
         print("------------------------------------------------------------")
         print("Downloading files")
@@ -316,7 +328,8 @@ class MainWindow:
                 print("------------------------------------------------------------")
                 print("Downloading file for user " + str(user_folder))
                 print("------------------------------------------------------------")
-                for type_file in types_file:
+                self.Status.configure(text = "Status: Downloading Files (" + str(user_folder) + ")...")
+                for type_file in module.OF.TYPE_FILE:
                     file_of_type = len(user[type_file])
                     if file_of_type > 0:
                         print("Downloading " + str(type_file))
@@ -324,16 +337,19 @@ class MainWindow:
                         for file in user[type_file]:
                             nbFileUser += 1
                             file_downloaded += 1
-                            if file["isVideo"] and file["size"] > 10_485_760:   #10MB
+                            if file["isVideo"] and file["size"] > module.OF.MIN_SIZE_SPECIAL_DISPLAY:   #10MB
                                 print("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type) + " (" + self.onlyfans.File_Size_Str(file["size"]) + ")")
                                 self.onlyfans.download(self, user_folder, file)
                                 print("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type) + " (" + self.onlyfans.File_Size_Str(file["size"]) + ") ... Done")
-                            elif nbFileUser % 50 == 0:
-                                print("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type))
+                            else:
+                                if nbFileUser % 50 == 0:
+                                    print("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type))
                                 self.onlyfans.download(self, user_folder, file)
                             self.FilesLeft.configure(text = "Files download: " + str(file_downloaded) + " / " + str(file_len))
-                            self.onlyfans.insert_database(user["user_id"], user["index"], file)
+                            self.onlyfans.insert_database(user["user_id"], file)
+                        print("Downloading " + str(type_file) + " ... Done")
                 print("Downloading file for user " + str(user_folder) + " ... Done")
+                self.onlyfans.update_date_database(user["user_id"])
             else:
                 print("------------------------------------------------------------")
                 print("0 file for user " + str(user_folder))

@@ -1,14 +1,15 @@
 import json
-from tkinter.constants import TRUE
 import requests
 import math
 import os
 import sqlite3
 from sqlite3 import Error
-import time as time2
+import time
+from datetime import datetime, timedelta
 import hashlib
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Union
 from urllib.parse import urlparse
+from dateutil import parser
 
 MESSAGES = 0b1000000
 PICTURES = 0b0100000
@@ -16,6 +17,9 @@ VIDEOS = 0b0010000
 STORIES = 0b0000100
 ARCHIVED = 0b0000010
 AUDIO = 0b0000001
+
+MIN_SIZE_SPECIAL_DISPLAY = 10_485_760   #10MB
+TYPE_FILE = ["messages", "stories", "images", "videos", "audio", "archived"]
 
 class Onlyfans:
     def __init__(self):
@@ -26,6 +30,7 @@ class Onlyfans:
         self.current_sub_list = []
         self.all_files_size = 0
         self.current_dl = 0
+        self.current_dl_other = 0
         self.config = {}
         self.filter_list = []
         self.session = requests.Session()
@@ -36,8 +41,90 @@ class Onlyfans:
         try:
             conn = sqlite3.connect('onlyfans.sqlite3.db', check_same_thread=False)
             c = conn.cursor()
-            c.execute("CREATE TABLE IF NOT EXISTS `entries`"
-                      "(`id`	TEXT, `url` TEXT, `userid` TEXT, `username` TEXT, `filename` TEXT);")
+
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS __MigrationsHistory (
+                    id TEXT PRIMARY KEY
+                );""")
+            c.execute("SELECT id FROM __MigrationsHistory ORDER BY Id")
+            migrations = []
+            for migration in c.fetchall():
+                migrations.append(migration[0])
+
+            if len(migrations) == 0: #For backward compatibility
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS entries (
+                        id TEXT,
+                        url TEXT,
+                        userid TEXT,
+                        username TEXT,
+                        filename TEXT
+                    );""")
+
+
+            if "202109071745_AddTableSubscriptions" not in migrations:
+                print('Applying migration 202109071745_AddTableSubscriptions')
+                c.execute("""
+                    CREATE TABLE Subscriptions (
+                        userid INTEGER PRIMARY KEY,
+                        username TEXT,
+                        isExpired BOOLEAN NOT NULL CHECK (paid IN (0, 1)),
+                        expireDate TEXT,
+                        paid BOOLEAN NOT NULL CHECK (paid IN (0, 1)),
+                        dateLastScrape TEXT
+                    );""")
+                c.execute("""
+                    INSERT INTO Subscriptions (
+                        userid,
+                        isExpired,
+                        paid
+                    )
+                    SELECT DISTINCT
+                        userid,
+                        0,
+                        0
+                    FROM
+                        entries
+                    """)
+                c.execute("INSERT INTO __MigrationsHistory VALUES('202109071745_AddTableSubscriptions')")
+                conn.commit()
+
+            if "202109071835_ReplacingTableEntries" not in migrations:
+                print('Applying migration 202109071835_ReplacingTableEntries')
+                c.execute("""
+                    CREATE TABLE ItemScrape (
+                        id INTEGER,
+                        userid INTEGER,
+                        filename TEXT,
+                        dateItem TEXT,
+                        CONSTRAINT PK_ItemScrape PRIMARY KEY (userid, filename),
+                        FOREIGN KEY (userid) REFERENCES Subscriptions(userid)
+                    );""")
+                c.execute("""
+                    INSERT INTO ItemScrape (
+                        id,
+                        userid,
+                        filename
+                    )
+                    SELECT
+                        MIN(id),
+                        userid,
+                        filename
+                    FROM
+                        entries
+                    GROUP BY
+                        userid,
+                        filename
+                    """)
+                c.execute("DROP TABLE entries")
+                c.execute("INSERT INTO __MigrationsHistory VALUES('202109071835_ReplacingTableEntries')")
+                conn.commit()
+
+            if "202109092334_PassingVaccum" not in migrations:
+                print('Applying migration 202109092334_PassingVaccum')
+                c.execute("VACUUM")
+                c.execute("INSERT INTO __MigrationsHistory VALUES('202109092334_PassingVaccum')")
+                conn.commit()
         except Error as e:
             print (e)
         return conn
@@ -55,7 +142,10 @@ class Onlyfans:
     def set_values(self):
         self.user_agent = self.config["user-agent"]
         self.sess = self.config["cookie"]
-        self.reload_sub = self.config["reload-sub"]
+        if "last-reload-sub" in self.config:
+            self.last_reload_sub = datetime.strptime(self.config["last-reload-sub"], "%Y-%m-%d %H:%M:%S")
+        else:
+            self.last_reload_sub = None
         auth_id = self.sess
         auth_id = auth_id[auth_id.find("auth_id=") + 8:]
         auth_id = auth_id[0:auth_id.find(";"):]
@@ -86,7 +176,7 @@ class Onlyfans:
 
     def create_signed_headers(self, link: str, auth_id: int, dynamic_rules: dict):
             # Users: 300000 | Creators: 301000
-            final_time = str(int(round(time2.time())))
+            final_time = str(int(round(time.time())))
             path = urlparse(link).path
             query = urlparse(link).query
             path = path if not query else f"{path}?{query}"
@@ -121,7 +211,6 @@ class Onlyfans:
             config = {}
             config["cookie"] = "cookie"
             config["user-agent"] = "user-agent"
-            config["reload-sub"] = False
             with open("config.json", "w") as f:
                 json.dump(config, f)
             print("File config.json created. Fill info and restart app.")
@@ -140,34 +229,42 @@ class Onlyfans:
             print (r.content)
             return
 
-        if self.reload_sub:
+        if self.last_reload_sub == None or self.last_reload_sub + timedelta(days=7) < datetime.now():
             print("------------------------------------------------------------")
-            print("Reloading subs from server")
+            if self.last_reload_sub == None:
+                print("Loading subs from server")
+            else:
+                print("Subsciption list older than 7 days, reloading from server")
             print("------------------------------------------------------------")
             if os.path.exists("Subs") == False:
                 os.mkdir("Subs")
 
             subscription_link = "https://onlyfans.com/api2/v2/subscriptions/subscribes?limit=99&offset="
-
             sub_temp = subscription_link.replace("offset=", "offset=0")
             json_result = self.make_json_server_request(sub_temp)
-
             index = 0
             while len(json_result) > 0:
                 print("Loading subs (part " + str(index + 1) + ")")
                 with open("Subs/Following_" + str(index) + ".subs", "w") as f:
                     json.dump(json_result, f)
-                for sub in json_result:
-                    if sub["subscribedBy"] == True and sub["username"] not in self.active_subs:
-                        self.active_subs.append(sub["username"])
-                    else:
-                        if sub["username"] not in self.expired_subs:
-                            self.expired_subs.append(sub["username"])
-                    if sub["username"] not in self.all_subs:
-                        self.all_subs.append(sub["username"])
+
+                for server_sub in json_result:
+                    sub = {
+                        'userid': server_sub["id"],
+                        'username': server_sub["username"],
+                        'isExpired': server_sub["subscribedIsExpiredNow"],
+                        'expiration': None,
+                        'paid': 0
+                    }
+                    if server_sub["subscribePrice"] != 0:
+                        sub["expiration"] = parser.parse(server_sub["subscribedByExpireDate"]).strftime("%Y-%m-%d %H:%M:%S")
+                        sub["paid"] = server_sub["currentSubscribePrice"] != None and server_sub["currentSubscribePrice"] > 0
+                    self.update_sub_database(sub)
+                    self.load_one_sub(sub)
+
                 if len(json_result) == 99:
-                    print("Pause " + str(index + 1) + " (5 secondes)")
-                    time2.sleep(5)
+                    print("Pause " + str(index + 1) + " (2 seconds)")
+                    time.sleep(2)
 
                     index += 1
                     sub_temp = subscription_link.replace("offset=", "offset=" + str(index * 99))
@@ -175,9 +272,17 @@ class Onlyfans:
                 else:
                     json_result = []
 
+            config = {}
+            config["cookie"] = self.config["cookie"]
+            config["user-agent"] = self.config["user-agent"]
+            config["last-reload-sub"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open("config.json", "w") as f:
+                json.dump(config, f)
+            print("File config.json updated.")
+
         else:
             print("------------------------------------------------------------")
-            print("Reloading subs from files")
+            print("Reloading subs from database")
             print("------------------------------------------------------------")
             if os.path.exists("Subs") == False:
                 print("Subs folder not found. You must load from serveur before realoding from files. Change config.json > 'reload-sub' to reload from server.")
@@ -190,20 +295,31 @@ class Onlyfans:
                 print("Loading file " + str(index + 1))
                 with open("Subs/Following_" + str(index) + ".subs", "r") as r:
                     json_result = json.load(r)
-                    for sub in json_result:
-                        if sub["subscribedBy"] == True and sub["username"] not in self.active_subs:
-                            self.active_subs.append(sub["username"])
-                        else:
-                            if sub["username"] not in self.expired_subs:
-                                self.expired_subs.append(sub["username"])
-                        if sub["username"] not in self.all_subs:
-                            self.all_subs.append(sub["username"])
+                    for database_sub in json_result:
+                        sub = {
+                            'userid': database_sub["id"],
+                            'username': database_sub["username"],
+                            'isExpired': database_sub["subscribedIsExpiredNow"],
+                            'expiration': None,
+                            'paid': 0
+                        }
+                        if database_sub["subscribePrice"] != 0:
+                            sub["expiration"] = parser.parse(database_sub["subscribedByExpireDate"]).strftime("%Y-%m-%d %H:%M:%S")
+                            sub["paid"] = database_sub["currentSubscribePrice"] != None and database_sub["currentSubscribePrice"] > 0
+                        self.load_one_sub(sub)
                 index += 1
         print("Loading complete ... " + str(len(self.all_subs)) + " subscriptions loaded")
 
         self.active_subs.sort()
         self.expired_subs.sort()
         self.all_subs.sort()
+
+    def load_one_sub(self, sub):
+        if sub["isExpired"] == False and (sub["expiration"] == None or datetime.strptime(sub["expiration"], "%Y-%m-%d %H:%M:%S") > datetime.now()):
+            self.active_subs.append(sub["username"])
+        else:
+            self.expired_subs.append(sub["username"])
+        self.all_subs.append(sub["username"])
 
     def make_json_server_request(self, url):
         self.prepareRequest(url)
@@ -223,9 +339,7 @@ class Onlyfans:
         link = 'https://onlyfans.com/api2/v2/users/' + username
         return_dict = {}
 
-        self.prepareRequest(link)
-        r = self.session.get(link)
-        json_data = json.loads(r.text)
+        json_data = self.make_json_server_request(link)
         if json_data is None:
             return
         if "error" in json_data:
@@ -244,37 +358,29 @@ class Onlyfans:
 
     def reset_download_size(self):
         self.current_dl = 0
+        self.current_dl_other = 0
         self.all_files_size = 0
 
     def File_Size_Str(self, size):
-        unit = ["KB", "MB", "GB", "TB"]
-        count = -1
-        if size < 1024:
-            return str(size) + "B"
-        else:
-            while size >= 1024:
-                size /= 1024
-                count += 1
+        unit = [" B", " KB", " MB", " GB", " TB"]
+        count = 0
+        while size >= 1024:
+            size /= 1024
+            count += 1
         return str('%.2f' % size) + unit[count]
 
     def get_links(self, info, flag, index):
-        if info is None:
-            return
         user_id = info["id"]
-        offsets = []
         messages = []
         images = []
         videos = []
         audio = []
         stories = []
         archived = []
-        filesNames = []
+        filesNames = set()
         total_count = info["photosCount"] + info["videosCount"] + info["audiosCount"]
         user_file_size = 0
         isExistingUser = self.user_exist_database(user_id)
-
-        offset_range = math.ceil(total_count / 100)
-        offsets = list(range(offset_range))
 
         message_api = "https://onlyfans.com/api2/v2/chats/"+str(user_id)+"/messages?limit=100&offset=&order=desc"
         post_api = "https://onlyfans.com/api2/v2/users/"+str(user_id)+"/posts?limit=100&offset=&order=publish_date_desc"
@@ -285,6 +391,7 @@ class Onlyfans:
         print("------------------------------------------------------------")
         print("Getting links for " + str(info["username"]))
         print("------------------------------------------------------------")
+        print("Start : " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
         if flag & MESSAGES:
             print("Loading messages")
@@ -298,8 +405,7 @@ class Onlyfans:
                 json_data = self.make_json_server_request(message_temp)
                 js_message.append(json_data)
                 offset += 1
-                if offset % 5 == 0:
-                    print("Loading messages ... " + str(offset * 100))
+                print("Loading messages ... " + str(offset * 100))
             print("Loading messages ... Done")
 
             print("Counting messages")
@@ -341,13 +447,11 @@ class Onlyfans:
         if flag & PICTURES or flag & VIDEOS:
             print("Loading pictures and videos")
             json_data = []
-            for n in offsets:
+            offset_range = math.ceil(total_count / 100)
+            for n in list(range(offset_range)):
                 offset = str(n * 100)
                 post_tmp = post_api.replace("offset=", "offset=" + offset)
-
-                self.prepareRequest(post_tmp)
-                r = self.session.get(post_tmp)
-                json_data.append(json.loads(r.text))
+                json_data.append(self.make_json_server_request(post_tmp))
                 print("Loading pictures and videos ... " + str(offset) + " / " + str(total_count))
             nbItemJson_data = len(json_data)
 
@@ -456,11 +560,7 @@ class Onlyfans:
                     nbCounted += 1
                     print("Loading and counting archives ... " + str(nbCounted) + " / " + str(off_range))
                     arch_temp = archive_api.replace("offset=", "offset=" + str(off))
-
-                    self.prepareRequest(arch_temp)
-                    r = self.session.get(arch_temp)
-                    js = json.loads(r.text)
-
+                    js = self.make_json_server_request(arch_temp)
                     for j in js:
                         if "postedAt" in j and "media" in j and "id" in j:
                             date = j["postedAt"]
@@ -542,15 +642,21 @@ class Onlyfans:
             "file_count" : len(messages) + len(stories) + len(images) + len(videos) + len(audio) + len(archived),
             "messages" : messages, "stories" : stories, "images" : images,
             "videos" : videos, "audio" : audio, "archived" : archived }
-        types_file = ["messages", "stories", "images", "videos", "audio", "archived"]
-        for type_file in types_file:
-            for file in links_info[type_file]:
-                user_file_size += file["size"]
+        print("End : " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        print("Getting links for " + str(info["username"]) + " ... Done")
+        for type_file in TYPE_FILE:
+            type_file_count = len(links_info[type_file])
+            if type_file_count > 0:
+                print("     " + type_file + " : " + str(type_file_count))
+                for file in links_info[type_file]:
+                    user_file_size += file["size"]
         links_info["user_file_size"] = user_file_size
         self.links.append(links_info)
-        print("Getting links for " + str(info["username"]) + " ... Done")
+        if links_info["file_count"] == 0:
+            self.update_date_database(user_id)
         print("     Total files: " + str(links_info["file_count"]))
         print("     Total size (videos): " + self.File_Size_Str(links_info["user_file_size"]))
+        return links_info
 
     def is_new_file(self, isExistingUser, user_id, fileName):
         if not isExistingUser:
@@ -573,46 +679,124 @@ class Onlyfans:
                     print("Validating duplicate " + type_links + " ... " + str(nbValider) + " / " + str(nbTotal))
             print("Validating duplicate " + type_links + " ... Done")
 
-    def file_names_exists_and_add_if_not(self, fileNames, fileName):
+    def file_names_exists_and_add_if_not(self, fileNames: set, fileName):
         if fileName in fileNames:
             return True
         else:
-            fileNames.append(fileName)
+            fileNames.add(fileName)
             return False
 
     def get_file_names(self, source):
         return source.split('/')[-1].split('?')[0]
 
-    def user_exist_database(self, userid):
+    def update_sub_database(self, sub):
         try:
+            params = {
+                'userid': sub["userid"],
+                'username': sub["username"],
+                'isExpired': sub["isExpired"],
+                'expireDate': sub["expiration"],
+                'paid': sub["paid"]
+            }
+            sql_insert_update = """
+                INSERT INTO Subscriptions
+                    (userid, username, isExpired, expireDate, paid)
+                VALUES
+                    (:userid, :username, :isExpired, :expireDate, :paid)
+                ON CONFLICT(userid) DO UPDATE 
+                SET 
+                    username = excluded.username,
+                    isExpired = excluded.isExpired,
+                    expireDate = excluded.expireDate,
+                    paid = excluded.paid;
+            """
             c = self.conn.cursor()
-            c.execute("SELECT * FROM entries WHERE userid = ? LIMIT 1", (userid,))
-            data = c.fetchall()
-            if len(data) > 0:
-                return True
-            return False
+            c.execute(sql_insert_update, params)
+            self.conn.commit()
+        except Error as e:
+            print(e)
+
+    def user_exist_database(self, user_id):
+        try:
+            params = {
+                'userid': user_id
+            }
+            sql_select = """
+                SELECT
+                    userid
+                FROM
+                    ItemScrape
+                WHERE
+                    userid = :userid
+                LIMIT
+                    1
+            """
+            c = self.conn.cursor()
+            c.execute(sql_select, params)
+            return len(c.fetchall()) > 0
         except:
             return False
 
-    def select_database(self, userid, filename):
+    def select_database(self, user_id, filename):
         try:
+            params = {
+                'userid': user_id,
+                'filename': filename
+            }
+            sql_select = """
+                SELECT
+                    userid
+                FROM
+                    ItemScrape
+                WHERE
+                    userid = :userid
+                    AND
+                    filename = :filename
+                LIMIT 
+                    1
+            """
             c = self.conn.cursor()
-            c.execute("SELECT * FROM entries where userid = ? AND filename = ? LIMIT 1", (userid, filename,))
-            data = c.fetchall()
-            if len(data) > 0:
-                return True
-            return False
+            c.execute(sql_select, params)
+            return len(c.fetchall()) > 0
         except:
             return False
 
-    def insert_database(self, id_user, username, file):
-        url = file["source"].split('?')[0]
-        post_id = file["id"]
-        File_Name = url.split('/')[-1]
+    def insert_database(self, user_id, file):
         try:
+            params = {
+                'id': str(file["id"]),
+                'userid': str(user_id),
+                'filename': str(file["source"].split('?')[0].split('/')[-1]),
+                'dateItem': parser.parse(file["date"]).strftime("%Y-%m-%d %H:%M:%S")
+            }
+            sql_insert = """
+                INSERT INTO ItemScrape
+                    (id, userid, filename, dateItem)
+                VALUES
+                    (:id, :userid, :filename, :dateItem)
+            """
             c = self.conn.cursor()
-            c.execute('INSERT INTO entries VALUES(?,?,?,?,?)', (str(post_id), str(url), str(id_user), str(username),
-                                                                  str(File_Name)))
+            c.execute(sql_insert, params)
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            pass
+
+    def update_date_database(self, user_id):
+        try:
+            params = {
+                'userid': str(user_id),
+                'dateLastScrape': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            sql_update = """
+                UPDATE
+                    Subscriptions
+                SET
+                    dateLastScrape = :dateLastScrape
+                WHERE
+                    userid = :userid
+            """
+            c = self.conn.cursor()
+            c.execute(sql_update, params)
             self.conn.commit()
         except sqlite3.IntegrityError:
             pass
@@ -647,7 +831,6 @@ class Onlyfans:
         File_Extension = File_Extension.split('?')[0]
         File_Name = file_name.split('/')[-1]
         File_Name = File_Name.split('?')[0]
-        total_download = self.all_files_size
         directory = ""
 
         if flag & MESSAGES:
@@ -661,6 +844,7 @@ class Onlyfans:
 
         self.create_dir(folder + "/" + directory)
         obj.ProgressBarItem['value'] =  0
+        obj.FileSizeLeft.configure(text = "0.00 B / 0.00 B")
         type_file = ""
 
         if File_Extension == "jpg" or File_Extension == "jpeg" or File_Extension == "png":
@@ -675,27 +859,35 @@ class Onlyfans:
         self.create_dir(folder + "/" + directory + "/" + type_file)
         if os.path.isfile("Files/" + folder + "/" + directory + "/" + type_file + "/" + File_Name) == False:
             with open("Files/" + folder + "/" + directory + "/" + type_file + "/" + File_Name, "wb") as file:
+                current_file_dl = 0
                 response = self.session.get(file_name, stream=True)
                 tmp = response.headers.get('content-length')
                 if tmp is None:
-                    file.write(response.content)
                     if file_links["isVideo"]:
-                        self.current_dl += file_links["size"]
+                        current_file_dl = file_links["size"]
+                        self.current_dl += current_file_dl
+                    file.write(response.content)
+
                 else:
                     total_length = int(tmp)
-                    current_file_dl = 0
+                    total_length_str = self.File_Size_Str(total_length)
+
                     for data in response.iter_content(chunk_size=4096):
-                        current_file_dl += len(data)
-                        self.current_dl += len(data)
-                        obj.ProgressBar['value'] =  (self.current_dl / total_download) * 100
-                        if file_links["isVideo"] and file_links["size"] > 10_485_760:   #10MB
-                            obj.ProgressBarItem['value'] =  (current_file_dl / total_length) * 100
+                        data_len = len(data)
+                        if file_links["isVideo"]:
+                            current_file_dl += data_len
+                            self.current_dl += data_len
+                            if file_links["size"] > MIN_SIZE_SPECIAL_DISPLAY:
+                                obj.ProgressBarItem['value'] =  (current_file_dl / total_length) * 100
+                                obj.FileSizeLeft.configure(text = self.File_Size_Str(current_file_dl) + " / " + total_length_str)
+                        else:
+                            self.current_dl_other += data_len
                         file.write(data)
-                    if file_links["isVideo"] and file_links["size"] > 10_485_760:   #10MB
-                        obj.ProgressBarItem['value'] =  100
-                    if current_file_dl != file_links["size"]:
-                        self.current_dl += file_links["size"] - current_file_dl
-                        obj.ProgressBar['value'] =  (self.current_dl / total_download) * 100
+
+                if file_links["isVideo"] and current_file_dl > 0:
+                    self.current_dl += (file_links["size"] - current_file_dl)
+                    obj.ProgressBar['value'] =  (self.current_dl / self.all_files_size) * 100
+                obj.TotalSizeLeft.configure(text = self.File_Size_Str(self.current_dl) + " (+" + self.File_Size_Str(self.current_dl_other) + ") / " + self.File_Size_Str(self.all_files_size))
 
     def create_dir(self, dirname):
         try:

@@ -1,5 +1,7 @@
 Files
+Subs/Following_*.subs
 config.json
+dynamicRules.json
 *.db
 .idea
 *__pycache__
