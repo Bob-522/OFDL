@@ -263,9 +263,6 @@ class Onlyfans:
                     self.load_one_sub(sub)
 
                 if len(json_result) == 99:
-                    print("Pause " + str(index + 1) + " (2 seconds)")
-                    time.sleep(2)
-
                     index += 1
                     sub_temp = subscription_link.replace("offset=", "offset=" + str(index * 99))
                     json_result = self.make_json_server_request(sub_temp)
