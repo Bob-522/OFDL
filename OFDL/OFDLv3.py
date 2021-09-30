@@ -3,11 +3,12 @@ import threading
 import module.OF
 import tkinter as tk
 from tkinter.ttk import *
+from module.DateEntry import DateEntry as DateEntry
+from module.Events import Events
 from module.OF import Onlyfans
 from icons.checked import checked_icon
 from icons.tristate import tristate_icon
 from icons.unchecked import unchecked_icon
-from module.DateEntry import DateEntry as DateEntry
 
 class CheckboxTreeview(Treeview):
     def __init__(self, master=None, **kw):
@@ -157,7 +158,9 @@ class MainWindow:
         self.FileSizeLeft = Label(master, text = "0.00 B / 0.00 B", width=32, anchor="e")
         self.FileSizeLeft.place(x = 440, y = 440)
 
-        self.onlyfans = Onlyfans()
+        self.events = Events()
+
+        self.onlyfans = Onlyfans(self.events)
         self.onlyfans.load_config()
         self.onlyfans.get_subscriptions()
         self.Sub_List = self.onlyfans.return_active_subs()
@@ -211,6 +214,7 @@ class MainWindow:
         users = []
         index = 0
 
+        self.events.display_event("Getting links", niveau_titre=1)
         self.Status.configure(text = "Status: Collecting Links ...")
         self.onlyfans.reset_download_size()
         self.onlyfans.clear_links()
@@ -293,11 +297,13 @@ class MainWindow:
         self.LogText.insert(tk.END, "\n\n")
         self.LogText.insert(tk.END, "Files to be downloaded: " + str(file_count) + "\n")
         self.LogText.insert(tk.END, "Download Size : " + self.onlyfans.File_Size_Str(total_size) + " (+ ~" + self.onlyfans.File_Size_Str(image_count * 725_000) + ")\n")
-        print("============================================================")
-        print("Getting links ... Completed")
-        print("     Files to be downloaded: " + str(file_count))
-        print("     Download Size (videos): " + self.onlyfans.File_Size_Str(total_size))
-        print("============================================================")
+
+        self.events.display_event(
+            "Getting links ... Completed",
+            "     Files to be downloaded: " + str(file_count),
+            "     Download Size (videos): " + self.onlyfans.File_Size_Str(total_size),
+            niveau_titre=1
+        )
 
         self.GetLinks.configure(state='normal')
         if file_count > 0:
@@ -318,48 +324,40 @@ class MainWindow:
         self.ProgressBarItem['value'] = 0
         file_downloaded = 0
 
-        print("------------------------------------------------------------")
-        print("Downloading files")
-        print("------------------------------------------------------------")
+        self.events.display_event("Downloading files", niveau_titre=1)
         for user in files:
             user_folder = self.onlyfans.subscript_array(user["index"])
             if user["file_count"] > 0:
                 self.onlyfans.create_dir(user_folder)
-                print("------------------------------------------------------------")
-                print("Downloading file for user " + str(user_folder))
-                print("------------------------------------------------------------")
+                self.events.display_event("Downloading file for user " + str(user_folder), niveau_titre=2)
                 self.Status.configure(text = "Status: Downloading Files (" + str(user_folder) + ")...")
                 for type_file in module.OF.TYPE_FILE:
                     file_of_type = len(user[type_file])
                     if file_of_type > 0:
-                        print("Downloading " + str(type_file))
+                        self.events.display_event("Downloading " + str(type_file))
                         nbFileUser = 0
                         for file in user[type_file]:
                             nbFileUser += 1
                             file_downloaded += 1
                             if file["isVideo"] and file["size"] > module.OF.MIN_SIZE_SPECIAL_DISPLAY:   #10MB
-                                print("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type) + " (" + self.onlyfans.File_Size_Str(file["size"]) + ")")
+                                self.events.display_event("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type) + " (" + self.onlyfans.File_Size_Str(file["size"]) + ")")
                                 self.onlyfans.download(self, user_folder, file)
-                                print("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type) + " (" + self.onlyfans.File_Size_Str(file["size"]) + ") ... Done")
+                                self.events.display_event("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type) + " (" + self.onlyfans.File_Size_Str(file["size"]) + ") ... Done")
                             else:
                                 if nbFileUser % 50 == 0:
-                                    print("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type))
+                                    self.events.display_event("Downloading " + type_file + " ... " + str(nbFileUser) + " / " + str(file_of_type))
                                 self.onlyfans.download(self, user_folder, file)
                             self.FilesLeft.configure(text = "Files download: " + str(file_downloaded) + " / " + str(file_len))
                             self.onlyfans.insert_database(user["user_id"], file)
-                        print("Downloading " + str(type_file) + " ... Done")
-                print("Downloading file for user " + str(user_folder) + " ... Done")
+                        self.events.display_event("Downloading " + str(type_file) + " ... Done")
+                self.events.display_event("Downloading file for user " + str(user_folder) + " ... Done")
                 self.onlyfans.update_date_database(user["user_id"])
             else:
-                print("------------------------------------------------------------")
-                print("0 file for user " + str(user_folder))
-                print("------------------------------------------------------------")
+                self.events.display_event("0 file for user " + str(user_folder), niveau_titre=2)
 
         self.FilesLeft.configure(text = "Files download: " + str(file_downloaded) + " / " + str(file_len) + " ... Done")
         self.Status.configure(text = "Status: Done ...")
-        print("============================================================")
-        print("Downloading files ... Completed")
-        print("============================================================")
+        self.events.display_event("Downloading files ... Completed", niveau_titre=1)
                         
         self.onlyfans.clear_links()
         self.onlyfans.clear_array()

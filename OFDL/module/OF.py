@@ -7,9 +7,10 @@ from sqlite3 import Error
 import time
 from datetime import datetime, timedelta
 import hashlib
-from typing import Any, Union
+from typing import Any, List, Union
 from urllib.parse import urlparse
 from dateutil import parser
+from .Events import Events
 
 MESSAGES = 0b1000000
 PICTURES = 0b0100000
@@ -22,7 +23,8 @@ MIN_SIZE_SPECIAL_DISPLAY = 10_485_760   #10MB
 TYPE_FILE = ["messages", "stories", "images", "videos", "audio", "archived"]
 
 class Onlyfans:
-    def __init__(self):
+    def __init__(self, events: Events):
+        self.events = events
         self.active_subs = []
         self.expired_subs = []
         self.all_subs = []
@@ -63,7 +65,7 @@ class Onlyfans:
 
 
             if "202109071745_AddTableSubscriptions" not in migrations:
-                print('Applying migration 202109071745_AddTableSubscriptions')
+                self.events.display_event('Applying migration 202109071745_AddTableSubscriptions')
                 c.execute("""
                     CREATE TABLE Subscriptions (
                         userid INTEGER PRIMARY KEY,
@@ -90,7 +92,7 @@ class Onlyfans:
                 conn.commit()
 
             if "202109071835_ReplacingTableEntries" not in migrations:
-                print('Applying migration 202109071835_ReplacingTableEntries')
+                self.events.display_event('Applying migration 202109071835_ReplacingTableEntries')
                 c.execute("""
                     CREATE TABLE ItemScrape (
                         id INTEGER,
@@ -121,12 +123,12 @@ class Onlyfans:
                 conn.commit()
 
             if "202109092334_PassingVaccum" not in migrations:
-                print('Applying migration 202109092334_PassingVaccum')
+                self.events.display_event('Applying migration 202109092334_PassingVaccum')
                 c.execute("VACUUM")
                 c.execute("INSERT INTO __MigrationsHistory VALUES('202109092334_PassingVaccum')")
                 conn.commit()
         except Error as e:
-            print (e)
+            self.events.display_event(str(e))
         return conn
     
     def load_config(self):
@@ -213,7 +215,7 @@ class Onlyfans:
             config["user-agent"] = "user-agent"
             with open("config.json", "w") as f:
                 json.dump(config, f)
-            print("File config.json created. Fill info and restart app.")
+            self.events.display_event("File config.json created. Fill info and restart app.")
             return
 
         dynamic_rules = requests.get("https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json").json()
@@ -225,17 +227,15 @@ class Onlyfans:
         self.prepareRequest(meurl)
         r = self.session.get(meurl)
         if r.status_code != 200:
-            print ("Login failed")
-            print (r.content)
+            self.events.display_event("Login failed")
+            self.events.display_event(r.content)
             return
 
         if self.last_reload_sub == None or self.last_reload_sub + timedelta(days=7) < datetime.now():
-            print("------------------------------------------------------------")
             if self.last_reload_sub == None:
-                print("Loading subs from server")
+                self.events.display_event("Loading subs from server", niveau_titre=2)
             else:
-                print("Subsciption list older than 7 days, reloading from server")
-            print("------------------------------------------------------------")
+                self.events.display_event("Subsciption list older than 7 days, reloading from server", niveau_titre=2)
             if os.path.exists("Subs") == False:
                 os.mkdir("Subs")
 
@@ -244,7 +244,7 @@ class Onlyfans:
             json_result = self.make_json_server_request(sub_temp)
             index = 0
             while len(json_result) > 0:
-                print("Loading subs (part " + str(index + 1) + ")")
+                self.events.display_event("Loading subs (part " + str(index + 1) + ")")
                 with open("Subs/Following_" + str(index) + ".subs", "w") as f:
                     json.dump(json_result, f)
 
@@ -275,21 +275,19 @@ class Onlyfans:
             config["last-reload-sub"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open("config.json", "w") as f:
                 json.dump(config, f)
-            print("File config.json updated.")
+            self.events.display_event("File config.json updated.")
 
         else:
-            print("------------------------------------------------------------")
-            print("Reloading subs from database")
-            print("------------------------------------------------------------")
+            self.events.display_event("Reloading subs from database", niveau_titre=2)
             if os.path.exists("Subs") == False:
-                print("Subs folder not found. You must load from serveur before realoding from files. Change config.json > 'reload-sub' to reload from server.")
+                self.events.display_event("Subs folder not found. You must load from serveur before realoding from files. Change config.json > 'reload-sub' to reload from server.")
 
             if os.path.exists("Subs/Following_0.subs") == False:
-                print("Subs file not found. You must load from serveur before realoding from files. Change config.json > 'reload-sub' to reload from server.")
+                self.events.display_event("Subs file not found. You must load from serveur before realoding from files. Change config.json > 'reload-sub' to reload from server.")
 
             index = 0
             while os.path.exists("Subs/Following_" + str(index) + ".subs"):
-                print("Loading file " + str(index + 1))
+                self.events.display_event("Loading file " + str(index + 1))
                 with open("Subs/Following_" + str(index) + ".subs", "r") as r:
                     json_result = json.load(r)
                     for database_sub in json_result:
@@ -305,7 +303,7 @@ class Onlyfans:
                             sub["paid"] = database_sub["currentSubscribePrice"] != None and database_sub["currentSubscribePrice"] > 0
                         self.load_one_sub(sub)
                 index += 1
-        print("Loading complete ... " + str(len(self.all_subs)) + " subscriptions loaded")
+        self.events.display_event("Loading complete ... " + str(len(self.all_subs)) + " subscriptions loaded")
 
         self.active_subs.sort()
         self.expired_subs.sort()
@@ -340,7 +338,7 @@ class Onlyfans:
         if json_data is None:
             return
         if "error" in json_data:
-            print (json_data)
+            self.events.display_event(json_data)
             return
         return_dict["photosCount"] = json_data["photosCount"]
         return_dict["videosCount"] = json_data["videosCount"]
@@ -385,13 +383,10 @@ class Onlyfans:
         archive_api = "https://onlyfans.com/api2/v2/users/"+ str(user_id)+"/posts/archived?limit=100&offset=0&order=publish_date_desc"
         audio_api = "https://onlyfans.com/api2/v2/users/"+str(user_id)+"/posts/audios?limit=10&offset=&order=publish_date_desc"
 
-        print("------------------------------------------------------------")
-        print("Getting links for " + str(info["username"]))
-        print("------------------------------------------------------------")
-        print("Start : " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self.events.display_event("Getting links for " + str(info["username"]), niveau_titre=2)
 
         if flag & MESSAGES:
-            print("Loading messages")
+            self.events.display_event("Loading messages")
             js_message = []
             offset = 0
 
@@ -402,10 +397,10 @@ class Onlyfans:
                 json_data = self.make_json_server_request(message_temp)
                 js_message.append(json_data)
                 offset += 1
-                print("Loading messages ... " + str(offset * 100))
-            print("Loading messages ... Done")
+                self.events.display_event("Loading messages ... " + str(offset * 100))
+            self.events.display_event("Loading messages ... Done")
 
-            print("Counting messages")
+            self.events.display_event("Counting messages")
             for j in js_message:
                 if "list" in j:
                     json_list = j["list"]
@@ -439,23 +434,23 @@ class Onlyfans:
                                         file_dict = {"source" : src, "size": file_size, "index" : index, "id": id_post,
                                                      "date" : date, "flag" : MESSAGES, "isVideo" : True, "fileName" : fileName}
                                         messages.append(file_dict)
-            print("Counting messages ... Done")
+            self.events.display_event("Counting messages ... Done")
 
         if flag & PICTURES or flag & VIDEOS:
-            print("Loading pictures and videos")
+            self.events.display_event("Loading pictures and videos")
             json_data = []
             offset_range = math.ceil(total_count / 100)
             for n in list(range(offset_range)):
                 offset = str(n * 100)
                 post_tmp = post_api.replace("offset=", "offset=" + offset)
                 json_data.append(self.make_json_server_request(post_tmp))
-                print("Loading pictures and videos ... " + str(offset) + " / " + str(total_count))
+                self.events.display_event("Loading pictures and videos ... " + str(offset) + " / " + str(total_count))
             nbItemJson_data = len(json_data)
 
-            print("Loading stories")
+            self.events.display_event("Loading stories")
             js = self.make_json_server_request(stories_api)
-            print("Loading stories ... done")
-            print("Counting stories")
+            self.events.display_event("Loading stories ... done")
+            self.events.display_event("Counting stories")
             for j in js:
                 if "media" in j and "createdAt" in j:
                     m = j["media"]
@@ -485,10 +480,10 @@ class Onlyfans:
                                                     "date" : date, "flag" : STORIES, "isVideo" : True, "fileName" : fileName}
                                     stories.append(file_dict)
                                 
-            print("Counting stories ... done")
+            self.events.display_event("Counting stories ... done")
         
         if flag & PICTURES:
-            print("Counting pictures")
+            self.events.display_event("Counting pictures")
             nbCounted = 0
             for j in json_data:
                 for js in j:
@@ -511,11 +506,11 @@ class Onlyfans:
                                              "date" : date, "flag" : PICTURES, "isVideo" : False, "fileName" : fileName}
                                         images.append(file_dict)
                 nbCounted += 1
-                print("Counting pictures ... " + str(nbCounted) + " / " + str(nbItemJson_data))
-            print("Counting pictures ... Done")
+                self.events.display_event("Counting pictures ... " + str(nbCounted) + " / " + str(nbItemJson_data))
+            self.events.display_event("Counting pictures ... Done")
             
         if flag & VIDEOS:
-            print("Counting videos")
+            self.events.display_event("Counting videos")
             nbCounted = 0
             for j in json_data:
                 for js in j:
@@ -542,20 +537,20 @@ class Onlyfans:
                                              "date" : date, "flag" : VIDEOS, "isVideo" : True, "fileName" : fileName}
                                         videos.append(file_dict)
                 nbCounted += 1
-                print("Counting videos ... " + str(nbCounted) + " / " + str(nbItemJson_data))
-            print("Counting videos ... Done")
+                self.events.display_event("Counting videos ... " + str(nbCounted) + " / " + str(nbItemJson_data))
+            self.events.display_event("Counting videos ... Done")
 
         if flag & ARCHIVED:
              cnt = info["archivedPostsCount"]
              if cnt > 0:
-                print("Loading and counting archives")
+                self.events.display_event("Loading and counting archives")
                 off_range = math.ceil(cnt / 100)
                 offsets_arch = list(range(off_range))
                 nbCounted = 0
 
                 for off in offsets_arch:
                     nbCounted += 1
-                    print("Loading and counting archives ... " + str(nbCounted) + " / " + str(off_range))
+                    self.events.display_event("Loading and counting archives ... " + str(nbCounted) + " / " + str(off_range))
                     arch_temp = archive_api.replace("offset=", "offset=" + str(off))
                     js = self.make_json_server_request(arch_temp)
                     for j in js:
@@ -586,19 +581,19 @@ class Onlyfans:
                                         file_dict = {"source" : type_src, "size": file_size, "index" : index, "id": id_post,
                                                 "date" : date, "flag" : ARCHIVED, "isVideo" : False, "fileName" : fileName}
                                         archived.append(file_dict)
-                print("Loading and counting archives ... Done")
+                self.events.display_event("Loading and counting archives ... Done")
 
         if flag & AUDIO:
             cnt = info["audiosCount"]
             if cnt > 0:
-                print("Loading and counting audio")
+                self.events.display_event("Loading and counting audio")
                 off_range = math.ceil(cnt / 10)
                 offsets_arch = list(range(off_range))
                 nbCounted = 0
 
                 for off in offsets_arch:
                     nbCounted += 1
-                    print("Loading and counting audio ... " + str(off) + " / " + str(off_range))
+                    self.events.display_event("Loading and counting audio ... " + str(off) + " / " + str(off_range))
                     audio_temp = audio_api.replace("offset=", "offset=" + str(off))
                     js = self.make_json_server_request(audio_temp)
                     for j in js:
@@ -620,39 +615,40 @@ class Onlyfans:
                                         file_dict = {"source" : type_src, "size": file_size, "index" : index, "id": id_post,
                                                     "date" : date, "flag" : AUDIO, "isVideo" : False, "fileName" : fileName}
                                         audio.append(file_dict)
-                print("Loading and counting audio ... Done")
+                self.events.display_event("Loading and counting audio ... Done")
 
         if isExistingUser:
-            print("Validating duplicate")
+            self.events.display_event("Validating duplicate")
             self.validate_duplicate(user_id, messages, "messages")
             self.validate_duplicate(user_id, stories, "stories")
             self.validate_duplicate(user_id, images, "images")
             self.validate_duplicate(user_id, videos, "videos")
             self.validate_duplicate(user_id, audio, "audio")
             self.validate_duplicate(user_id, archived, "archived")
-            print("Validating duplicate ... Done")
+            self.events.display_event("Validating duplicate ... Done")
         else:
-            print("Validating duplicate ... Skipped (Never downloaded " + str(info["username"]) + ")")
+            self.events.display_event("Validating duplicate ... Skipped (Never downloaded " + str(info["username"]) + ")")
 
         links_info = {
             "user_id" : user_id, "index" : index, 
             "file_count" : len(messages) + len(stories) + len(images) + len(videos) + len(audio) + len(archived),
             "messages" : messages, "stories" : stories, "images" : images,
             "videos" : videos, "audio" : audio, "archived" : archived }
-        print("End : " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        print("Getting links for " + str(info["username"]) + " ... Done")
+        events_detail:List[str] = []
+        events_detail.append("Getting links for " + str(info["username"]) + " ... Done")
         for type_file in TYPE_FILE:
             type_file_count = len(links_info[type_file])
             if type_file_count > 0:
-                print("     " + type_file + " : " + str(type_file_count))
+                events_detail.append("     " + type_file + " : " + str(type_file_count))
                 for file in links_info[type_file]:
                     user_file_size += file["size"]
         links_info["user_file_size"] = user_file_size
         self.links.append(links_info)
         if links_info["file_count"] == 0:
             self.update_date_database(user_id)
-        print("     Total files: " + str(links_info["file_count"]))
-        print("     Total size (videos): " + self.File_Size_Str(links_info["user_file_size"]))
+            events_detail.append("     Total files: " + str(links_info["file_count"]))
+            events_detail.append("     Total size (videos): " + self.File_Size_Str(links_info["user_file_size"]))
+        self.events.display_event(*events_detail, niveau_titre=2)
         return links_info
 
     def is_new_file(self, isExistingUser, user_id, fileName):
@@ -666,15 +662,15 @@ class Onlyfans:
         if nbTotal > 0:
             nbValider = 0
             list_copy = user_links.copy()
-            print("Validating duplicate " + type_links + " ... 0 / " + str(nbTotal))
+            self.events.display_event("Validating duplicate " + type_links + " ... 0 / " + str(nbTotal))
             for link in list_copy:
                 if not link["isVideo"] or self.select_database(user_id, link["fileName"]):
                     user_links.remove(link)
                     self.all_files_size -= link["size"]
                 nbValider += 1
                 if nbValider % 100 == 0:
-                    print("Validating duplicate " + type_links + " ... " + str(nbValider) + " / " + str(nbTotal))
-            print("Validating duplicate " + type_links + " ... Done")
+                    self.events.display_event("Validating duplicate " + type_links + " ... " + str(nbValider) + " / " + str(nbTotal))
+            self.events.display_event("Validating duplicate " + type_links + " ... Done")
 
     def file_names_exists_and_add_if_not(self, fileNames: set, fileName):
         if fileName in fileNames:
@@ -711,7 +707,7 @@ class Onlyfans:
             c.execute(sql_insert_update, params)
             self.conn.commit()
         except Error as e:
-            print(e)
+            self.events.display_event(str(e))
 
     def user_exist_database(self, user_id):
         try:
