@@ -231,11 +231,11 @@ class Onlyfans:
             self.events.display_event(r.content)
             return
 
-        if self.last_reload_sub == None or self.last_reload_sub + timedelta(days=7) < datetime.now():
+        if self.last_reload_sub == None or self.last_reload_sub + timedelta(days=2) < datetime.now():
             if self.last_reload_sub == None:
                 self.events.display_event("Loading subs from server", niveau_titre=2)
             else:
-                self.events.display_event("Subsciption list older than 7 days, reloading from server", niveau_titre=2)
+                self.events.display_event("Subsciption list older than 2 days, reloading from server", niveau_titre=2)
             if os.path.exists("Subs") == False:
                 os.mkdir("Subs")
 
