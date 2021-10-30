@@ -159,13 +159,7 @@ class Onlyfans:
         sess = sess[0:sess.find(";"):]
         return sess
 
-    def create_headers(
-        self,
-        dynamic_rules: dict[str, Any],
-        auth_id: Union[str, int],
-        user_agent: str = "",
-        link: str = "https://onlyfans.com/",
-    ):
+    def create_headers(self, dynamic_rules: dict[str, Any], auth_id: Union[str, int], user_agent: str = "", link: str = "https://onlyfans.com/"):
         headers: dict[str, Any] = {}
         headers["user-agent"] = user_agent
         headers["referer"] = link
@@ -316,10 +310,14 @@ class Onlyfans:
             self.expired_subs.append(sub["username"])
         self.all_subs.append(sub["username"])
 
-    def make_json_server_request(self, url):
+    def make_json_server_request(self, url, nomFichier=None):
         self.prepareRequest(url)
         response = self.session.get(url)
-        return json.loads(response.content)
+        loadedJson = json.loads(response.content)
+        if nomFichier != None:
+            with open("Subs/" + nomFichier + ".json", "w") as f:
+                json.dump(loadedJson, f)
+        return loadedJson
 
     def return_active_subs(self):
         return self.active_subs
@@ -393,10 +391,10 @@ class Onlyfans:
             json_data = self.make_json_server_request(message_api)
             js_message.append(json_data)
             while json_data['hasMore'] == True:
+                offset += 1
                 message_temp = message_api.replace("offset=", "offset=" + str(offset * 100))
                 json_data = self.make_json_server_request(message_temp)
                 js_message.append(json_data)
-                offset += 1
                 self.events.display_event("Loading messages ... " + str(offset * 100))
             self.events.display_event("Loading messages ... Done")
 
@@ -664,7 +662,7 @@ class Onlyfans:
             list_copy = user_links.copy()
             self.events.display_event("Validating duplicate " + type_links + " ... 0 / " + str(nbTotal))
             for link in list_copy:
-                if not link["isVideo"] or self.select_database(user_id, link["fileName"]):
+                if not link["isVideo"] and self.select_database(user_id, link["fileName"]):
                     user_links.remove(link)
                     self.all_files_size -= link["size"]
                 nbValider += 1
@@ -672,7 +670,7 @@ class Onlyfans:
                     self.events.display_event("Validating duplicate " + type_links + " ... " + str(nbValider) + " / " + str(nbTotal))
             self.events.display_event("Validating duplicate " + type_links + " ... Done")
 
-    def file_names_exists_and_add_if_not(self, fileNames: set, fileName):
+    def file_names_exists_and_add_if_not(self, fileNames: set, fileName: str):
         if fileName in fileNames:
             return True
         else:
