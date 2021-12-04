@@ -152,6 +152,7 @@ class Onlyfans:
         auth_id = auth_id[auth_id.find("auth_id=") + 8:]
         auth_id = auth_id[0:auth_id.find(";"):]
         self.auth_id = str(auth_id)
+        self.x_bc = self.config["x-bc"]
 
     def get_sess(self):
         sess = self.sess
@@ -159,12 +160,12 @@ class Onlyfans:
         sess = sess[0:sess.find(";"):]
         return sess
 
-    def create_headers(self, dynamic_rules: dict[str, Any], auth_id: Union[str, int], user_agent: str = "", link: str = "https://onlyfans.com/"):
+    def create_headers(self, dynamic_rules: dict[str, Any], auth_id: Union[str, int], x_bc:str, user_agent: str = "", link: str = "https://onlyfans.com/"):
         headers: dict[str, Any] = {}
         headers["user-agent"] = user_agent
         headers["referer"] = link
         headers["user-id"] = str(auth_id)
-        headers["x-bc"] = ""
+        headers["x-bc"] = x_bc
         for remove_header in dynamic_rules["remove_headers"]:
             headers.pop(remove_header)
         headers["app-token"] = dynamic_rules["app_token"]
@@ -193,7 +194,7 @@ class Onlyfans:
 
     def prepareRequest(self, link: str):
         referer = f"https://onlyfans.com/api2/v2/users/me"
-        headers = self.create_headers(self.dynamic_rules, self.auth_id, self.user_agent, referer)
+        headers = self.create_headers(self.dynamic_rules, self.auth_id, self.x_bc, self.user_agent, referer)
         headers |= self.create_signed_headers(link, 0, self.dynamic_rules)
         headers |= {
             'accept': 'application/json, text/plain, */*',
@@ -207,6 +208,7 @@ class Onlyfans:
             config = {}
             config["cookie"] = "cookie"
             config["user-agent"] = "user-agent"
+            config["x-bc"] = "x-bc"
             with open("config.json", "w") as f:
                 json.dump(config, f)
             self.events.display_event("File config.json created. Fill info and restart app.")
@@ -222,7 +224,7 @@ class Onlyfans:
         r = self.session.get(meurl)
         if r.status_code != 200:
             self.events.display_event("Login failed")
-            self.events.display_event(r.content)
+            self.events.display_event(str(r.content))
             return
 
         if self.last_reload_sub == None or self.last_reload_sub + timedelta(days=2) < datetime.now():
@@ -266,6 +268,7 @@ class Onlyfans:
             config = {}
             config["cookie"] = self.config["cookie"]
             config["user-agent"] = self.config["user-agent"]
+            config["x-bc"] = self.config["x-bc"]
             config["last-reload-sub"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open("config.json", "w") as f:
                 json.dump(config, f)
