@@ -187,7 +187,7 @@ class MainWindow:
                 if type_file == "videos":
                     self.LogText.insert(tk.END, " (" + self.onlyfans.File_Size_Str(links["user_file_size"]) + ")\n")
                 elif type_file == "images":
-                    self.LogText.insert(tk.END, " (~" + self.onlyfans.File_Size_Str(nb_links * 725_000) + ")\n")
+                    self.LogText.insert(tk.END, " (~" + self.onlyfans.File_Size_Str(nb_links * 1_000_000) + ")\n")
                 else:
                     self.LogText.insert(tk.END, "\n")
 
@@ -199,7 +199,7 @@ class MainWindow:
     def display_info_end(self, file_count, total_size, image_count):
         self.LogText.insert(tk.END, "\n\n")
         self.LogText.insert(tk.END, "Files to be downloaded: " + str(file_count) + "\n")
-        self.LogText.insert(tk.END, "Download Size : " + self.onlyfans.File_Size_Str(total_size) + " (+ ~" + self.onlyfans.File_Size_Str(image_count * 725_000) + ")\n")
+        self.LogText.insert(tk.END, "Download Size : " + self.onlyfans.File_Size_Str(total_size) + " (+ ~" + self.onlyfans.File_Size_Str(image_count * 1_000_000) + ")\n")
 
         self.events.display_event(
             "Getting links ... Completed",
@@ -260,7 +260,7 @@ class MainWindow:
 
         self.FilesLeft.configure(text = "Files download: " + str(file_downloaded) + " / " + str(file_len) + " ... Done")
         self.Status.configure(text = "Status: Done ...")
-        self.events.display_event("Downloading files ... Completed", niveau_titre=1)
+        self.events.display_event("Downloading files ... Completed " + datetime.now().strftime("%Y-%m-%d"), niveau_titre=1)
                         
         self.onlyfans.clear_links()
         self.onlyfans.clear_array()

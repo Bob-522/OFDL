@@ -5,3 +5,5 @@ dynamicRules.json
 *.db
 .idea
 *__pycache__
+Temps/*
+Subs/*

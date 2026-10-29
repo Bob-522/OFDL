@@ -172,25 +172,25 @@ class Onlyfans:
         return headers
 
     def create_signed_headers(self, link: str, auth_id: int, dynamic_rules: dict):
-            # Users: 300000 | Creators: 301000
-            final_time = str(int(round(time.time())))
-            path = urlparse(link).path
-            query = urlparse(link).query
-            path = path if not query else f"{path}?{query}"
-            a = [dynamic_rules["static_param"], final_time, path, str(auth_id)]
-            msg = "\n".join(a)
-            message = msg.encode("utf-8")
-            hash_object = hashlib.sha1(message)
-            sha_1_sign = hash_object.hexdigest()
-            sha_1_b = sha_1_sign.encode("ascii")
-            checksum = (
-                sum([sha_1_b[number] for number in dynamic_rules["checksum_indexes"]])
-                + dynamic_rules["checksum_constant"]
-            )
-            headers = {}
-            headers["sign"] = dynamic_rules["format"].format(sha_1_sign, abs(checksum))
-            headers["time"] = final_time
-            return headers
+        # Users: 300000 | Creators: 301000
+        final_time = str(int(round(time.time())))
+        path = urlparse(link).path
+        query = urlparse(link).query
+        path = path if not query else f"{path}?{query}"
+        a = [dynamic_rules["static_param"], final_time, path, str(auth_id)]
+        msg = "\n".join(a)
+        message = msg.encode("utf-8")
+        hash_object = hashlib.sha1(message)
+        sha_1_sign = hash_object.hexdigest()
+        sha_1_b = sha_1_sign.encode("ascii")
+        checksum = (
+            sum([sha_1_b[number] for number in dynamic_rules["checksum_indexes"]])
+            + dynamic_rules["checksum_constant"]
+        )
+        headers = {}
+        headers["sign"] = dynamic_rules["format"].format(sha_1_sign, abs(checksum))
+        headers["time"] = final_time
+        return headers
 
     def prepareRequest(self, link: str):
         referer = f"https://onlyfans.com/api2/v2/users/me"
@@ -214,7 +214,10 @@ class Onlyfans:
             self.events.display_event("File config.json created. Fill info and restart app.")
             return
 
-        dynamic_rules = requests.get("https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json").json()
+        #dynamic_rules = requests.get("https://raw.githubusercontent.com/DIGITALCRIMINALS/dynamic-rules/main/onlyfans.json").json()
+        #dynamic_rules = requests.get("https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json").json()
+        dynamic_rules = requests.get("https://raw.githubusercontent.com/betoalanis/Dynamic-Rules/main/dynamic-rules.json").json()
+        
         with open("dynamicRules.json", "w") as f:
             json.dump(dynamic_rules, f)
         self.dynamic_rules = dynamic_rules
@@ -240,7 +243,7 @@ class Onlyfans:
             json_result = self.make_json_server_request(sub_temp)
             index = 0
             while len(json_result) > 0:
-                self.events.display_event("Loading subs (part " + str(index + 1) + ")")
+                self.events.display_event("Loading subs (part " + str(index + 1) + ", " + str(len(json_result)) + " users)")
                 with open("Subs/Following_" + str(index) + ".subs", "w") as f:
                     json.dump(json_result, f)
 
@@ -258,12 +261,9 @@ class Onlyfans:
                     self.update_sub_database(sub)
                     self.load_one_sub(sub)
 
-                if len(json_result) == 99:
-                    index += 1
-                    sub_temp = subscription_link.replace("offset=", "offset=" + str(index * 99))
-                    json_result = self.make_json_server_request(sub_temp)
-                else:
-                    json_result = []
+                index += 1
+                sub_temp = subscription_link.replace("offset=", "offset=" + str(index * 99))
+                json_result = self.make_json_server_request(sub_temp)
 
             config = {}
             config["cookie"] = self.config["cookie"]
@@ -313,12 +313,22 @@ class Onlyfans:
             self.expired_subs.append(sub["username"])
         self.all_subs.append(sub["username"])
 
-    def make_json_server_request(self, url, nomFichier=None):
+    def make_json_server_request(self, url, nomFichier=None, request_delay=0):
+        if nomFichier is not None:
+            cache_path = nomFichier + ".json"
+            if os.path.isfile(cache_path) and time.time() - os.path.getmtime(cache_path) < 24 * 60 * 60:
+                with open(cache_path, "r") as f:
+                    return json.load(f)
+
+        if request_delay:
+            time.sleep(request_delay)
         self.prepareRequest(url)
         response = self.session.get(url)
         loadedJson = json.loads(response.content)
-        if nomFichier != None:
-            with open("Subs/" + nomFichier + ".json", "w") as f:
+        if nomFichier is not None:
+            if not os.path.isdir(os.path.dirname(nomFichier)):
+                os.makedirs(os.path.dirname(nomFichier))
+            with open(cache_path, "w+") as f:
                 json.dump(loadedJson, f)
         return loadedJson
 
@@ -335,11 +345,11 @@ class Onlyfans:
         link = 'https://onlyfans.com/api2/v2/users/' + username
         return_dict = {}
 
-        json_data = self.make_json_server_request(link)
+        json_data = self.make_json_server_request(link, "./Temps/" + username + "/user_info")
         if json_data is None:
             return
         if "error" in json_data:
-            self.events.display_event(json_data)
+            self.events.display_event(str(json_data))
             return
         return_dict["photosCount"] = json_data["photosCount"]
         return_dict["videosCount"] = json_data["videosCount"]
@@ -376,32 +386,39 @@ class Onlyfans:
         filesNames = set()
         total_count = info["photosCount"] + info["videosCount"] + info["audiosCount"]
         user_file_size = 0
+        username = str(info["username"])
         isExistingUser = self.user_exist_database(user_id)
 
         message_api = "https://onlyfans.com/api2/v2/chats/"+str(user_id)+"/messages?limit=100&offset=&order=desc"
         post_api = "https://onlyfans.com/api2/v2/users/"+str(user_id)+"/posts?limit=100&offset=&order=publish_date_desc"
         stories_api = "https://onlyfans.com/api2/v2/users/"+str(user_id)+"/stories?limit=100&offset=0&order=desc"
-        archive_api = "https://onlyfans.com/api2/v2/users/"+ str(user_id)+"/posts/archived?limit=100&offset=0&order=publish_date_desc"
-        audio_api = "https://onlyfans.com/api2/v2/users/"+str(user_id)+"/posts/audios?limit=10&offset=&order=publish_date_desc"
+        archive_api = "https://onlyfans.com/api2/v2/users/"+ str(user_id)+"/posts/archived?limit=100&offset=&order=publish_date_desc"
+        audio_api = "https://onlyfans.com/api2/v2/users/"+str(user_id)+"/posts/audios?limit=100&offset=&order=publish_date_desc"
 
-        self.events.display_event("Getting links for " + str(info["username"]), niveau_titre=2)
+        self.events.display_event("Getting links for " + str(username), niveau_titre=2)
 
         if flag & MESSAGES:
             self.events.display_event("Loading messages")
             js_message = []
             offset = 0
 
-            json_data = self.make_json_server_request(message_api)
+            json_data = self.make_json_server_request(message_api, "Temps/" + username + "/messages_" + str(offset))
             js_message.append(json_data)
             while json_data['hasMore'] == True:
                 offset += 1
                 message_temp = message_api.replace("offset=", "offset=" + str(offset * 100))
-                json_data = self.make_json_server_request(message_temp)
+                json_data = self.make_json_server_request(
+                    message_temp,
+                    "Temps/" + username + "/messages_" + str(offset),
+                    request_delay=2.5,
+                )
                 js_message.append(json_data)
-                self.events.display_event("Loading messages ... " + str(offset * 100))
+                self.events.display_event("Loading messages ... part " + str(offset + 1))
             self.events.display_event("Loading messages ... Done")
 
             self.events.display_event("Counting messages")
+            nb_photo = 0
+            nb_video = 0
             for j in js_message:
                 if "list" in j:
                     json_list = j["list"]
@@ -410,82 +427,106 @@ class Onlyfans:
                             media = sec["media"]
                             date = sec["createdAt"]
                             for m in media:
-                                if "src" in m and "type" in m:
+                                if "files" in m and "type" in m:
+                                    files = m["files"]
+                                    if files is None:
+                                        continue
+                                    file = files["full"]
+                                    if file is None:
+                                        continue
+                                    file_url = file["url"]
+                                    if file_url is None:
+                                        continue
                                     id_post = sec["id"]
                                     type_src = m["type"]
-                                    src = m["src"]
-                                    if src is None:
-                                        continue
-                                    m_info = m["info"]
-                                    m_info = m_info["source"]
-                                    file_size = m_info["size"]
-                                    fileName = self.get_file_names(src)
+                                    file_size = file["size"]
+                                    fileName = self.get_file_names(file_url)
                                     
                                     if type_src == "photo" and not self.file_names_exists_and_add_if_not(filesNames, fileName):
                                         #self.all_files_size += file_size
-                                        file_dict = {"source" : src, "size": file_size, "index" : index, "id": id_post,
+                                        file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": id_post,
                                                      "date" : date, "flag" : MESSAGES, "isVideo" : False, "fileName" : fileName}
+                                        nb_photo += 1
                                         messages.append(file_dict)
                                     elif type_src == "video" and not self.file_names_exists_and_add_if_not(filesNames, fileName) and self.is_new_file(isExistingUser, user_id, fileName):
                                         if file_size == 0:
-                                            r = self.session.head(src)
+                                            r = self.session.head(file_url)
                                             if "Content-Length" in r.headers:
                                                 file_size = int(r.headers["Content-Length"])
                                         self.all_files_size += file_size
-                                        file_dict = {"source" : src, "size": file_size, "index" : index, "id": id_post,
+                                        file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": id_post,
                                                      "date" : date, "flag" : MESSAGES, "isVideo" : True, "fileName" : fileName}
+                                        nb_video += 1
                                         messages.append(file_dict)
-            self.events.display_event("Counting messages ... Done")
+            self.events.display_event("Counting messages ... Done (" + str(nb_photo) + " photo(s) - " + str(nb_video) + " video(s))")
 
         if flag & PICTURES or flag & VIDEOS:
             self.events.display_event("Loading pictures and videos")
             json_data = []
-            offset_range = math.ceil(total_count / 100)
+            nbZeroItems = 0
+            offset_range = math.ceil(total_count / 50)
             for n in list(range(offset_range)):
-                offset = str(n * 100)
+                offset = str(n * 50)
                 post_tmp = post_api.replace("offset=", "offset=" + offset)
-                json_data.append(self.make_json_server_request(post_tmp))
+                json_reponse = self.make_json_server_request(post_tmp, "Temps/" + username + "/post_" + str(n))
+                if len(json_reponse) != 50 and n + 1 < offset_range:
+                    self.events.display_event("Server response contained " + str(len(json_reponse)) + " items instead of 50")
+                if len(json_reponse) == 0:
+                    nbZeroItems += 1
+                    if nbZeroItems >= 3:
+                        self.events.display_event("3 consecutives requests returned 0 items, stopping enumeration")
+                        break
+                json_data.append(json_reponse)
                 self.events.display_event("Loading pictures and videos ... " + str(offset) + " / " + str(total_count))
             nbItemJson_data = len(json_data)
 
             self.events.display_event("Loading stories")
-            js = self.make_json_server_request(stories_api)
+            js = self.make_json_server_request(stories_api, "Temps/" + username + "/stories")
             self.events.display_event("Loading stories ... done")
             self.events.display_event("Counting stories")
+            nb_photo = 0
+            nb_video = 0
             for j in js:
                 if "media" in j and "createdAt" in j:
                     m = j["media"]
                     date = j["createdAt"]
                     post_id = j["id"]
                     for media in m:
-                        if "source" in media and "type" in media:
-                            file_details = media["source"]
+                        if "files" in media and "type" in media:
+                            files = media["files"]
+                            if files is None:
+                                continue
+                            file = files["full"]
+                            if file is None:
+                                continue
+                            file_url = file["url"]
+                            if file_url is None:
+                                continue
                             type_src = media["type"]
-                            if "source" in file_details and "size" in file_details:
-                                src = file_details["source"]
-                                file_size = file_details["size"]
-                                fileName = self.get_file_names(src)
-                                if type_src == "photo" and not self.file_names_exists_and_add_if_not(filesNames, fileName):
-                                    #self.all_files_size += file_size
-                                    file_dict = {"source" : src, "size": file_size, "index" : index, "id": post_id,
-                                                    "date" : date, "flag" : STORIES, "isVideo" : False, "fileName" : fileName}
-                                    stories.append(file_dict)
-                                elif type_src == "video" and not self.file_names_exists_and_add_if_not(filesNames, fileName) and self.is_new_file(isExistingUser, user_id, fileName):
-                                    file_size = file_details["size"]
-                                    if file_size == 0:
-                                        r = self.session.head(src)
-                                        if "Content-Length" in r.headers:
-                                            file_size = int(r.headers["Content-Length"])
-                                    self.all_files_size += file_size
-                                    file_dict = {"source" : src, "size": file_size, "index" : index, "id": post_id,
-                                                    "date" : date, "flag" : STORIES, "isVideo" : True, "fileName" : fileName}
-                                    stories.append(file_dict)
-                                
-            self.events.display_event("Counting stories ... done")
+                            file_size = file["size"]
+                            fileName = self.get_file_names(file_url)
+                            if type_src == "photo" and not self.file_names_exists_and_add_if_not(filesNames, fileName):
+                                #self.all_files_size += file_size
+                                file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": post_id,
+                                                "date" : date, "flag" : STORIES, "isVideo" : False, "fileName" : fileName}
+                                nb_photo += 1
+                                stories.append(file_dict)
+                            elif type_src == "video" and not self.file_names_exists_and_add_if_not(filesNames, fileName) and self.is_new_file(isExistingUser, user_id, fileName):
+                                if file_size == 0:
+                                    r = self.session.head(file_url)
+                                    if "Content-Length" in r.headers:
+                                        file_size = int(r.headers["Content-Length"])
+                                self.all_files_size += file_size
+                                file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": post_id,
+                                                "date" : date, "flag" : STORIES, "isVideo" : True, "fileName" : fileName}
+                                nb_video += 1
+                                stories.append(file_dict)
+            self.events.display_event("Counting stories ... done (" + str(nb_photo) + " photo(s) - " + str(nb_video) + " video(s))")
         
         if flag & PICTURES:
             self.events.display_event("Counting pictures")
             nbCounted = 0
+            nb_photo = 0
             for j in json_data:
                 for js in j:
                     if "postedAt" in js and "media" in js and "id" in js:
@@ -493,26 +534,35 @@ class Onlyfans:
                         media = js["media"]
                         id_post = js["id"]
                         for m in media:
-                            if "source" in m:
-                                file_details = m["source"]
-                                if "size" in file_details and "source" in file_details:
-                                    file_size = file_details["size"]
-                                    type_src = file_details["source"]
-                                    if type_src is None or not type_src.startswith('https://cdn'):
-                                        continue
-                                    fileName = self.get_file_names(type_src)
-                                    if (".jpg" in type_src or ".jpeg" in type_src or ".png" in type_src) and not self.file_names_exists_and_add_if_not(filesNames, fileName):
-                                        #self.all_files_size += file_size
-                                        file_dict = {"source" : type_src, "size": file_size, "index" : index, "id": id_post,
-                                             "date" : date, "flag" : PICTURES, "isVideo" : False, "fileName" : fileName}
-                                        images.append(file_dict)
+                            if "files" in m and "type" in m:
+                                files = m["files"]
+                                if files is None:
+                                    continue
+                                file = files["full"]
+                                if file is None:
+                                    continue
+                                file_url = file["url"]
+                                if file_url is None:
+                                    continue
+                                type_src = m["type"]
+                                file_size = file["size"]
+                                if type_src != "photo" or not file_url.startswith('https://cdn'):
+                                    continue
+                                fileName = self.get_file_names(file_url)
+                                if not self.file_names_exists_and_add_if_not(filesNames, fileName):
+                                    #self.all_files_size += file_size
+                                    file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": id_post,
+                                            "date" : date, "flag" : PICTURES, "isVideo" : False, "fileName" : fileName}
+                                    nb_photo += 1
+                                    images.append(file_dict)
                 nbCounted += 1
                 self.events.display_event("Counting pictures ... " + str(nbCounted) + " / " + str(nbItemJson_data))
-            self.events.display_event("Counting pictures ... Done")
+            self.events.display_event("Counting pictures ... Done (" + str(nb_photo) + " photo(s))")
             
         if flag & VIDEOS:
             self.events.display_event("Counting videos")
             nbCounted = 0
+            nb_video = 0
             for j in json_data:
                 for js in j:
                     if "postedAt" in js and "media" in js and "id" in js:
@@ -520,103 +570,135 @@ class Onlyfans:
                         media = js["media"]
                         id_post = js["id"]
                         for m in media:
-                            if "source" in m:
-                                file_details = m["source"]
-                                if "size" in file_details and "source" in file_details:
-                                    file_size = file_details["size"]
-                                    type_src = file_details["source"]
-                                    if type_src is None or not type_src.startswith('https://cdn'):
-                                        continue
-                                    fileName = self.get_file_names(type_src)
-                                    if ".mp4" in type_src and not self.file_names_exists_and_add_if_not(filesNames, fileName) and self.is_new_file(isExistingUser, user_id, fileName):
-                                        if file_size == 0:
-                                            r = self.session.head(type_src)
-                                            if "Content-Length" in r.headers:
-                                                file_size = int(r.headers["Content-Length"])      
-                                        self.all_files_size += file_size
-                                        file_dict = {"source" : type_src, "size": file_size, "index" : index, "id": id_post,
-                                             "date" : date, "flag" : VIDEOS, "isVideo" : True, "fileName" : fileName}
-                                        videos.append(file_dict)
+                            if "files" in m and "type" in m:
+                                files = m["files"]
+                                if files is None:
+                                    continue
+                                file = files["full"]
+                                if file is None:
+                                    continue
+                                file_url = file["url"]
+                                if file_url is None:
+                                    continue
+                                file_size = file["size"]
+                                if m["type"] != "video" or not file_url.startswith('https://cdn'):
+                                    continue
+                                fileName = self.get_file_names(file_url)
+                                if not self.file_names_exists_and_add_if_not(filesNames, fileName) and self.is_new_file(isExistingUser, user_id, fileName):
+                                    if file_size == 0:
+                                        r = self.session.head(file_url)
+                                        if "Content-Length" in r.headers:
+                                            file_size = int(r.headers["Content-Length"])      
+                                    self.all_files_size += file_size
+                                    file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": id_post,
+                                            "date" : date, "flag" : VIDEOS, "isVideo" : True, "fileName" : fileName}
+                                    nb_video += 1
+                                    videos.append(file_dict)
                 nbCounted += 1
                 self.events.display_event("Counting videos ... " + str(nbCounted) + " / " + str(nbItemJson_data))
-            self.events.display_event("Counting videos ... Done")
+            self.events.display_event("Counting videos ... Done (" + str(nb_video) + " video(s))")
 
         if flag & ARCHIVED:
              cnt = info["archivedPostsCount"]
              if cnt > 0:
                 self.events.display_event("Loading and counting archives")
-                off_range = math.ceil(cnt / 100)
+                off_range = math.ceil(cnt / 50)
                 offsets_arch = list(range(off_range))
                 nbCounted = 0
+                nb_photo = 0
+                nb_video = 0
 
                 for off in offsets_arch:
                     nbCounted += 1
                     self.events.display_event("Loading and counting archives ... " + str(nbCounted) + " / " + str(off_range))
-                    arch_temp = archive_api.replace("offset=", "offset=" + str(off))
-                    js = self.make_json_server_request(arch_temp)
+                    arch_temp = archive_api.replace("offset=", "offset=" + str(off * 50))
+                    js = self.make_json_server_request(arch_temp, "Temps/" + username + "/archives_" + str(off))
+                    if len(js) != 50 and off + 1 < off_range:
+                        self.events.display_event("Server response contained " + str(len(js)) + " items instead of 50")
                     for j in js:
                         if "postedAt" in j and "media" in j and "id" in j:
                             date = j["postedAt"]
                             media = j["media"]
                             id_post = j["id"]
                             for m in media:
-                                if "source" in m:
-                                    file_details = m["source"]
-                                    if "size" in file_details and "source" in file_details:
-                                        file_size = file_details["size"]
-                                        type_src = file_details["source"]
-                                    if type_src is None or not type_src.startswith('https://cdn'):
+                                if "files" in m and "type" in m:
+                                    files = m["files"]
+                                    if files is None:
                                         continue
-                                    fileName = self.get_file_names(type_src)
-                                    if ".mp4" in type_src and not self.file_names_exists_and_add_if_not(filesNames, fileName) and self.is_new_file(isExistingUser, user_id, fileName):
+                                    file = files["full"]
+                                    if file is None:
+                                        continue
+                                    file_url = file["url"]
+                                    if file_url is None:
+                                        continue
+                                    type_src = m["type"]
+                                    file_size = file["size"]
+                                    if type_src != "photo" or not file_url.startswith('https://cdn'):
+                                        continue
+                                    fileName = self.get_file_names(file_url)
+
+                                    if type_src == "photo" and not self.file_names_exists_and_add_if_not(filesNames, fileName):
+                                        #self.all_files_size += file_size
+                                        file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": id_post,
+                                                     "date" : date, "flag" : ARCHIVED, "isVideo" : False, "fileName" : fileName}
+                                        nb_photo += 1
+                                        archived.append(file_dict)
+                                    elif type_src == "video" and not self.file_names_exists_and_add_if_not(filesNames, fileName) and self.is_new_file(isExistingUser, user_id, fileName):
                                         if file_size == 0:
-                                            r = self.session.head(type_src)
+                                            r = self.session.head(file_url)
                                             if "Content-Length" in r.headers:
                                                 file_size = int(r.headers["Content-Length"])
                                         self.all_files_size += file_size
-                                        file_dict = {"source" : type_src, "size": file_size, "index" : index, "id": id_post,
-                                                "date" : date, "flag" : ARCHIVED, "isVideo" : True, "fileName" : fileName}
+                                        file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": id_post,
+                                                     "date" : date, "flag" : ARCHIVED, "isVideo" : True, "fileName" : fileName}
+                                        nb_video += 1
                                         archived.append(file_dict)
-                                    if (".jpg" in type_src or ".jpeg" in type_src or ".png" in type_src) and not self.file_names_exists_and_add_if_not(filesNames, fileName):
-                                        #self.all_files_size += file_size
-                                        file_dict = {"source" : type_src, "size": file_size, "index" : index, "id": id_post,
-                                                "date" : date, "flag" : ARCHIVED, "isVideo" : False, "fileName" : fileName}
-                                        archived.append(file_dict)
-                self.events.display_event("Loading and counting archives ... Done")
+                self.events.display_event("Loading and counting archives ... Done (" + str(nb_photo) + " photo(s) - " + str(nb_video) + " video(s))")
 
         if flag & AUDIO:
             cnt = info["audiosCount"]
             if cnt > 0:
                 self.events.display_event("Loading and counting audio")
-                off_range = math.ceil(cnt / 10)
+                off_range = math.ceil(cnt / 50)
                 offsets_arch = list(range(off_range))
                 nbCounted = 0
+                nb_audio = 0
 
                 for off in offsets_arch:
                     nbCounted += 1
                     self.events.display_event("Loading and counting audio ... " + str(off) + " / " + str(off_range))
-                    audio_temp = audio_api.replace("offset=", "offset=" + str(off))
-                    js = self.make_json_server_request(audio_temp)
+                    audio_temp = audio_api.replace("offset=", "offset=" + str(off * 50))
+                    js = self.make_json_server_request(audio_temp, "Temps/" + username + "/audio_" + str(off))
+                    if len(js) != 50 and off + 1 < off_range:
+                        self.events.display_event("Server response contained " + str(len(js)) + " items instead of 50")
                     for j in js:
                         if "postedAt" in j and "media" in j and "id" in j:
                             date = j["postedAt"]
                             media = j["media"]
                             id_post = j["id"]
                             for m in media:
-                                if "source" in m:
-                                    file_details = m["source"]
-                                    if "size" in file_details and "source" in file_details:
-                                        file_size = file_details["size"]
-                                        type_src = file_details["source"]
-                                    if type_src is None or not type_src.startswith('https://cdn'):
+                                if "files" in m and "type" in m:
+                                    files = m["files"]
+                                    if files is None:
                                         continue
-                                    if ".mp3" in type_src:
-                                        #self.all_files_size += file_size
-                                        fileName = self.get_file_names(type_src)
-                                        file_dict = {"source" : type_src, "size": file_size, "index" : index, "id": id_post,
-                                                    "date" : date, "flag" : AUDIO, "isVideo" : False, "fileName" : fileName}
-                                        audio.append(file_dict)
-                self.events.display_event("Loading and counting audio ... Done")
+                                    file = files["full"]
+                                    if file is None:
+                                        continue
+                                    file_url = file["url"]
+                                    if file_url is None:
+                                        continue
+                                    type_src = m["type"]
+                                    file_size = file["size"]
+                                    fileName = self.get_file_names(file_url)
+
+                                    if type_src != "audio" or not file_url.startswith('https://cdn'):
+                                        continue
+                                    #self.all_files_size += file_size
+                                    file_dict = {"source" : file_url, "size": file_size, "index" : index, "id": id_post,
+                                                "date" : date, "flag" : AUDIO, "isVideo" : False, "fileName" : fileName}
+                                    nb_audio += 1
+                                    audio.append(file_dict)
+                self.events.display_event("Loading and counting audio ... Done (" + str(nb_audio) + " audio(s))")
 
         if isExistingUser:
             self.events.display_event("Validating duplicate")
@@ -628,7 +710,7 @@ class Onlyfans:
             self.validate_duplicate(user_id, archived, "archived")
             self.events.display_event("Validating duplicate ... Done")
         else:
-            self.events.display_event("Validating duplicate ... Skipped (Never downloaded " + str(info["username"]) + ")")
+            self.events.display_event("Validating duplicate ... Skipped (Never downloaded " + username + ")")
 
         links_info = {
             "user_id" : user_id, "index" : index, 
@@ -636,7 +718,7 @@ class Onlyfans:
             "messages" : messages, "stories" : stories, "images" : images,
             "videos" : videos, "audio" : audio, "archived" : archived }
         events_detail:List[str] = []
-        events_detail.append("Getting links for " + str(info["username"]) + " ... Done")
+        events_detail.append("Getting links for " + username + " ... Done")
         for type_file in TYPE_FILE:
             type_file_count = len(links_info[type_file])
             if type_file_count > 0:
